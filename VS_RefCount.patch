@@ -1,0 +1,509 @@
+diff -x '*.pyc' -Naur ./gem5_old/src/mem/cache/replacement_policies/lru_rp.cc ./gem5/src/mem/cache/replacement_policies/lru_rp.cc
+--- ./gem5_old/src/mem/cache/replacement_policies/lru_rp.cc	2020-03-24 19:14:37.119640000 -0700
++++ ./gem5/src/mem/cache/replacement_policies/lru_rp.cc	2020-03-22 14:12:08.715904991 -0700
+@@ -38,6 +38,9 @@
+ LRURP::LRURP(const Params *p)
+     : BaseReplacementPolicy(p)
+ {
++	local_block_size = p->block_size;
++        local_size = p->size;
++        local_assoc = p->assoc;
+ }
+ 
+ void
+diff -x '*.pyc' -Naur ./gem5_old/src/mem/cache/replacement_policies/lru_rp.hh ./gem5/src/mem/cache/replacement_policies/lru_rp.hh
+--- ./gem5_old/src/mem/cache/replacement_policies/lru_rp.hh	2020-03-24 19:14:37.119640000 -0700
++++ ./gem5/src/mem/cache/replacement_policies/lru_rp.hh	2020-03-22 14:11:35.927892914 -0700
+@@ -44,6 +44,9 @@
+ class LRURP : public BaseReplacementPolicy
+ {
+   protected:
++	unsigned local_block_size;            /** cache line size */
++        unsigned local_size;                          /** cache size */
++        unsigned local_assoc;                      /** set associativity */
+     /** LRU-specific implementation of replacement data. */
+     struct LRUReplData : ReplacementData
+     {
+diff -x '*.pyc' -Naur ./gem5_old/src/mem/cache/replacement_policies/refcount_rp.cc ./gem5/src/mem/cache/replacement_policies/refcount_rp.cc
+--- ./gem5_old/src/mem/cache/replacement_policies/refcount_rp.cc	1969-12-31 17:00:00.000000000 -0700
++++ ./gem5/src/mem/cache/replacement_policies/refcount_rp.cc	2020-03-24 13:56:55.163339000 -0700
+@@ -0,0 +1,322 @@
++#include "mem/cache/replacement_policies/refcount_rp.hh"
++
++#include <cassert>
++#include <memory>
++#include <vector>
++
++#include "params/RefCountRP.hh"
++
++//Creating the Prediction table
++struct Predvalue
++{
++	unsigned int maxCstored : 4;
++	unsigned int confstored : 1;
++};
++
++struct Predvalue Predtable[256][256];
++
++RefCountRP::RefCountRP(const Params *p)
++    : BaseReplacementPolicy(p)
++{
++	local_block_size = p->block_size;
++        local_size = p->size;
++        local_assoc = p->assoc;
++}
++
++void
++RefCountRP::invalidate(const std::shared_ptr<ReplacementData>& replacement_data)
++const
++{
++    // Reset last touch timestamp
++    	//std::static_pointer_cast<RefCountReplData>(
++        //replacement_data)->lastTouchTick = Tick(0);
++
++	//casting data
++	std::shared_ptr<RefCountReplData> RefCount_replacement_data =
++        std::static_pointer_cast<RefCountReplData>(replacement_data);
++
++/*	std::vector<ReplaceableEntry*> setAssociativeList = replacement_data->getSetAssocEntry();
++
++	
++
++	for (const auto& c_line : setAssociativeList) {
++//		c_line->counter++;
++
++		//count_temp = 
++		std::static_pointer_cast<RefCountReplData>(
++                    c_line->replacementData)->counter++;
++		//count_temp = count_temp + 1;
++		//RefCount_replacement_data->counter=count_temp;
++
++	}*/
++
++	//getting set number, way number and PC value
++	unsigned int setno=replacement_data->getSet();
++	unsigned int lineno=replacement_data->getWay();
++	unsigned int pcval=replacement_data->getPC();
++	uint8_t row_no;
++	unsigned int set_num, line_num;
++
++	//creating hash of set number	
++	unsigned int temp_set1 = setno&0xF;
++	for(int i =0; i<7; i++){
++	setno = setno>>4;
++	unsigned int temp_set2 = setno&0xF;
++	set_num = temp_set1^temp_set2;
++	temp_set1 = set_num;
++	}
++
++	//creating hash of way number	
++	unsigned int temp_way1 = lineno&0xF;
++	for(int i =0; i<7; i++){
++	lineno = lineno>>4;
++	unsigned int temp_way2 = lineno&0xF;
++	line_num = temp_way1^temp_way2;
++	temp_way1 = line_num;
++	}
++
++	//concatenating set and way to get hashed_line
++	uint8_t col_no = (set_num<<4) | (line_num);
++	RefCount_replacement_data->hashed_line = col_no; 
++
++	//creating hashed PC	
++	unsigned int temp1 = pcval&0xFF;
++	for(int i =0; i<7; i++){
++	pcval = pcval>>8;
++	unsigned int temp2 = pcval&0xFF;
++	row_no = temp1^temp2;
++	temp1 = row_no;
++	}
++	RefCount_replacement_data->hashedPC = row_no; 
++	
++	Predtable[row_no][col_no].maxCstored = RefCount_replacement_data->maxCpresent;
++	
++	if(std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->maxCpresent == std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->maxCpast) {
++	Predtable[row_no][col_no].confstored = 1;
++	}
++	else {
++	Predtable[row_no][col_no].confstored = 0;
++	}
++
++/*	std::shared_ptr<RefCountReplData> RefCount_replacement_data =
++	std::static_pointer_cast<RefCountReplData>(replacement_data);
++
++	unsigned int  line_counter = RefCount_replacement_data->cf.counter;
++	unsigned int  line_cpresent = RefCount_replacement_data->cf.maxCpresent;
++	unsigned int  line_cpast = RefCount_replacement_data->cf.maxCpast;
++	unsigned int  line_conf = RefCount_replacement_data->cf.conf;
++*/
++	
++}
++
++void
++RefCountRP::touch(const std::shared_ptr<ReplacementData>& replacement_data) const
++{
++   // Update last touch timestamp
++    	//std::static_pointer_cast<RefCountReplData>(
++        //replacement_data)->lastTouchTick = curTick();
++
++	//unsigned int count_temp;
++
++	//getting all the cache lines in the set in a vector
++	std::vector<ReplaceableEntry*> setAssociativeList = replacement_data->getSetAssocEntry();
++
++	//casting data
++	std::shared_ptr<RefCountReplData> RefCount_replacement_data =
++        std::static_pointer_cast<RefCountReplData>(replacement_data);
++
++	for (const auto& c_line : setAssociativeList) {
++//		c_line->counter++;
++		if(std::static_pointer_cast<RefCountReplData>(
++                    c_line->replacementData)->counter < 15){
++		//count_temp = 
++		std::static_pointer_cast<RefCountReplData>(
++                    c_line->replacementData)->counter++;
++		}
++		//count_temp = count_temp + 1;
++		//RefCount_replacement_data->counter=count_temp;
++
++	}
++
++/*	if(std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->cf.maxCpresent > std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->cf.counter) {
++	std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->cf.maxCpresent = std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->cf.maxCpresent;
++	}
++*/
++	if (std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->maxCpresent < std::static_pointer_cast<RefCountReplData>(
++        replacement_data)->counter){
++	RefCount_replacement_data->maxCpresent = RefCount_replacement_data->counter;
++	}
++	RefCount_replacement_data->counter = 0;
++}
++
++void
++RefCountRP::reset(const std::shared_ptr<ReplacementData>& replacement_data) const
++{
++   // Set last touch timestamp
++    	//std::static_pointer_cast<RefCountReplData>(
++        //replacement_data)->lastTouchTick = curTick();
++
++	//casting data	
++	std::shared_ptr<RefCountReplData> RefCount_replacement_data =
++        std::static_pointer_cast<RefCountReplData>(replacement_data);
++
++/*	unsigned int setno=replacement_data->getSet();
++	unsigned int lineno=replacement_data->getWay();
++	unsigned int pcval=replacement_data->getPC();
++	uint8_t row_no;
++	unsigned int set_num, line_num;
++	
++	unsigned int temp_set1 = setno&0xF;
++	for(int i =0; i<7; i++){
++	setno = setno>>4;
++	unsigned int temp_set2 = setno&0xF;
++	set_num = temp_set1^temp_set2;
++	temp_set1 = set_num;
++	}
++	
++	unsigned int temp_way1 = lineno&0xF;
++	for(int i =0; i<7; i++){
++	lineno = lineno>>4;
++	unsigned int temp_way2 = lineno&0xF;
++	line_num = temp_way1^temp_way2;
++	temp_way1 = line_num;
++	}
++
++	uint8_t col_no = (set_num<<4) | (line_num);
++	//RefCount_replacement_data->hashed_line = col_no; 
++	
++	unsigned int temp1 = pcval&0xFF;
++	for(int i =0; i<7; i++){
++	pcval = pcval>>8;
++	unsigned int temp2 = pcval&0xFF;
++	row_no = temp1^temp2;
++	temp1 = row_no;
++	}
++
++	RefCount_replacement_data->hashedPC = row_no;
++*/
++	//getting hashedPC and hashed_line of the cache line
++	uint8_t row_no,col_no;
++	row_no = RefCount_replacement_data->hashedPC;
++	col_no = RefCount_replacement_data->hashed_line;
++	RefCount_replacement_data->counter = 0;
++	RefCount_replacement_data->maxCpresent = 0;
++	RefCount_replacement_data->maxCpast = Predtable[row_no][col_no].maxCstored;
++	RefCount_replacement_data->conf = Predtable[row_no][col_no].confstored;
++
++}
++
++ReplaceableEntry*
++RefCountRP::getVictim(const ReplacementCandidates& candidates) const
++{	
++	std::vector<ReplaceableEntry*> expired={};
++/*	unsigned int  line_counter = RefCount_replacement_data->cf.counter;
++	unsigned int  line_cpresent = RefCount_replacement_data->cf.maxCpresent;
++	unsigned int  line_cpast = RefCount_replacement_data->cf.maxCpast;
++	unsigned int  line_conf = RefCount_replacement_data->cf.conf;
++*/
++	assert(candidates.size() > 0);
++	unsigned int lru_count = 0;
++	ReplaceableEntry* mru_victim = candidates[0];
++	ReplaceableEntry* victim = candidates[0];
++
++/*    for (const auto& candidate : candidates) {
++           if (std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->lastTouchTick >
++                std::static_pointer_cast<RefCountReplData>(
++                    mru_victim->replacementData)->lastTouchTick) {
++            mru_victim = candidate;
++            }
++        }
++*/
++
++	//incrementing counter of all lines in set	
++	for (const auto& candidate : candidates){
++		if(std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->counter < 15){
++		std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->counter++;
++		}
++	}
++
++	//finding mru candidate
++	for (const auto& candidate : candidates){
++		if(std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->counter == 1){
++		mru_victim = candidate;
++		}
++	}
++
++	//finding expired candidates
++	for (const auto& candidate : candidates){
++		if((std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->counter > std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->maxCpresent) &&
++		   (std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->counter > std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->maxCpast) &&
++		   (std::static_pointer_cast<RefCountReplData>(
++                    candidate->replacementData)->conf ==1) && (candidate!=mru_victim)){
++//			candidate->RefCount_replacement_data->valid = false;
++			expired.push_back(candidate);
++		 }
++	}
++
++	if(expired.size()==0){
++/*		for (const auto& candidate : candidates) {
++		// Update victim entry if necessary
++		  if (std::static_pointer_cast<RefCountReplData>(
++		            candidate->replacementData)->lastTouchTick <
++		        std::static_pointer_cast<RefCountReplData>(
++		            victim->replacementData)->lastTouchTick) {
++		    victim = candidate;
++		  }
++		} */
++		for (const auto& candidate : candidates) {
++			if(std::static_pointer_cast<RefCountReplData>(
++                    	candidate->replacementData)->counter > lru_count){
++			lru_count = std::static_pointer_cast<RefCountReplData>(
++                    	candidate->replacementData)->counter;
++			}
++		}
++		for (const auto& candidate : candidates) {
++			if(std::static_pointer_cast<RefCountReplData>(
++                    	candidate->replacementData)->counter == lru_count){
++			victim = candidate;
++			}
++		}
++	}
++	else if(expired.size()==1){
++		victim = expired[0];
++	}
++	else{
++/*	    	for (const auto& candidate : expired) {
++		// Update victim entry if necessary
++		  if (std::static_pointer_cast<RefCountReplData>(
++		            candidate->replacementData)->lastTouchTick <
++		        std::static_pointer_cast<RefCountReplData>(
++		            victim->replacementData)->lastTouchTick) {
++		    victim = candidate;
++		  }
++		}*/
++		for (const auto& candidate : expired) {
++			if(std::static_pointer_cast<RefCountReplData>(
++                    	candidate->replacementData)->counter > lru_count){
++			lru_count = std::static_pointer_cast<RefCountReplData>(
++                    	candidate->replacementData)->counter;
++			}
++		}
++		for (const auto& candidate : expired) {
++			if(std::static_pointer_cast<RefCountReplData>(
++                    	candidate->replacementData)->counter == lru_count){
++			victim = candidate;
++			}
++		}
++	}
++    return victim;
++}
++
++std::shared_ptr<ReplacementData>
++RefCountRP::instantiateEntry()
++{
++    return std::shared_ptr<ReplacementData>(new RefCountReplData());
++}
++
++RefCountRP*
++RefCountRPParams::create()
++{
++    return new RefCountRP(this);
++}
+diff -x '*.pyc' -Naur ./gem5_old/src/mem/cache/replacement_policies/refcount_rp.hh ./gem5/src/mem/cache/replacement_policies/refcount_rp.hh
+--- ./gem5_old/src/mem/cache/replacement_policies/refcount_rp.hh	1969-12-31 17:00:00.000000000 -0700
++++ ./gem5/src/mem/cache/replacement_policies/refcount_rp.hh	2020-03-24 04:12:12.015122000 -0700
+@@ -0,0 +1,100 @@
++/**
++ * @file
++ * Declaration of a Counter based cache replacement policy.
++ * The victim is chosen based on counter value.
++ */
++
++#ifndef __MEM_CACHE_REPLACEMENT_POLICIES_REFCOUNT_RP_HH__
++#define __MEM_CACHE_REPLACEMENT_POLICIES_REFCOUNT_RP_HH__
++
++#include "mem/cache/replacement_policies/base.hh"
++
++struct RefCountRPParams;
++
++class RefCountRP : public BaseReplacementPolicy
++{
++  protected:
++	unsigned local_block_size;            /** cache line size */
++        unsigned local_size;                          /** cache size */
++        unsigned local_assoc;                      /** set associativity */
++    /** RefCount-specific implementation of replacement data. */
++    struct RefCountReplData : ReplacementData
++    {
++        /** Tick on which the entry was last touched. */
++        Tick lastTouchTick;
++	
++//	bool valid; 	
++	uint8_t hashed_line;
++
++	//21 bits added per cache line
++	uint8_t hashedPC;
++	unsigned int counter : 4;
++	unsigned int maxCpresent : 4;
++	unsigned int maxCpast : 4;
++	unsigned int conf : 1;
++		
++        /**
++         * Default constructor. Invalidate data.
++         */
++    //    RefCountReplData() : valid(false) {}
++	//RefCountReplData() : hashed_line(0) {}
++	RefCountReplData() : hashed_line(0), hashedPC(0), counter(0), maxCpresent(0), maxCpast(0), conf(0) {}
++    };
++
++  public:
++    /** Convenience typedef. */
++    typedef RefCountRPParams Params;
++
++    /**
++     * Construct and initiliaze this replacement policy.
++     */
++    RefCountRP(const Params *p);
++
++    /**
++     * Destructor.
++     */
++    ~RefCountRP() {}
++
++    /**
++     * Invalidate replacement data to set it as the next probable victim.
++     * Sets its last touch tick as the starting tick.
++     *
++     * @param replacement_data Replacement data to be invalidated.
++     */
++    void invalidate(const std::shared_ptr<ReplacementData>& replacement_data)
++                                                              const override;
++
++    /**
++     * Touch an entry to update its replacement data.
++     * Sets its last touch tick as the current tick.
++     *
++     * @param replacement_data Replacement data to be touched.
++     */
++    void touch(const std::shared_ptr<ReplacementData>& replacement_data) const
++                                                                     override;
++
++    /**
++     * Reset replacement data. Used when an entry is inserted.
++     * Sets its last touch tick as the current tick.
++     *
++     * @param replacement_data Replacement data to be reset.
++     */
++    void reset(const std::shared_ptr<ReplacementData>& replacement_data) const
++                                                                     override;
++
++    /**
++     * Find replacement victim using Reference counter.
++     *
++     * @param candidates Replacement candidates, selected by indexing policy.
++     * @return Replacement entry to be replaced.
++     */
++    ReplaceableEntry* getVictim(const ReplacementCandidates& candidates) const
++                                                                     override;
++
++    /**
++     * Instantiate a replacement data entry.
++     *
++     * @return A shared pointer to the new replacement data.
++     */
++    std::shared_ptr<ReplacementData> instantiateEntry() override;
++};
++
++#endif // __MEM_CACHE_REPLACEMENT_POLICIES_REFCOUNT_RP_HH__
+diff -x '*.pyc' -Naur ./gem5_old/src/mem/cache/replacement_policies/ReplacementPolicies.py ./gem5/src/mem/cache/replacement_policies/ReplacementPolicies.py
+--- ./gem5_old/src/mem/cache/replacement_policies/ReplacementPolicies.py	2020-03-24 19:14:37.119640000 -0700
++++ ./gem5/src/mem/cache/replacement_policies/ReplacementPolicies.py	2020-03-10 22:57:43.345241000 -0700
+@@ -29,6 +29,7 @@
+ from m5.params import *
+ from m5.proxy import *
+ from m5.SimObject import SimObject
++ 
+ 
+ class BaseReplacementPolicy(SimObject):
+     type = 'BaseReplacementPolicy'
+@@ -54,6 +55,17 @@
+     type = 'LRURP'
+     cxx_class = 'LRURP'
+     cxx_header = "mem/cache/replacement_policies/lru_rp.hh"
++    block_size = Param.Int(Parent.cache_line_size, "block size in bytes")
++    size = Param.MemorySize(Parent.size, "capacity in bytes")
++    assoc = Param.Int(Parent.assoc, "associativity")
++
++class RefCountRP(BaseReplacementPolicy):
++    type = 'RefCountRP'
++    cxx_class = 'RefCountRP'
++    cxx_header = "mem/cache/replacement_policies/refcount_rp.hh"
++    block_size = Param.Int(Parent.cache_line_size, "block size in bytes")
++    size = Param.MemorySize(Parent.size, "capacity in bytes")
++    assoc = Param.Int(Parent.assoc, "associativity")
+ 
+ class BIPRP(LRURP):
+     type = 'BIPRP'
+diff -x '*.pyc' -Naur ./gem5_old/src/mem/cache/replacement_policies/SConscript ./gem5/src/mem/cache/replacement_policies/SConscript
+--- ./gem5_old/src/mem/cache/replacement_policies/SConscript	2020-03-24 19:14:37.119640000 -0700
++++ ./gem5/src/mem/cache/replacement_policies/SConscript	2020-03-19 22:13:13.944289244 -0700
+@@ -41,3 +41,4 @@
+ Source('random_rp.cc')
+ Source('second_chance_rp.cc')
+ Source('tree_plru_rp.cc')
++Source('refcount_rp.cc')
